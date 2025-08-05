@@ -3,9 +3,9 @@ import { BaseModel, column, beforeCreate, beforeSave, hasMany } from '@adonisjs/
 import type { HasMany } from '@adonisjs/lucid/types/relations'
 import hash from '@adonisjs/core/services/hash'
 import { v4 as uuidv4 } from 'uuid'
-import Room from './room.js'
-import Game from './game.js'
-import Turn from './turn.js'
+
+// IMPORTANTE: Importa el modelo de AccessToken del propio AdonisJS Auth
+import AccessToken from '#models/access_token'
 
 export default class User extends BaseModel {
   @column({ isPrimary: true })
@@ -32,6 +32,12 @@ export default class User extends BaseModel {
   @column.dateTime({ autoCreate: true, autoUpdate: true })
   declare updatedAt: DateTime
 
+  // RELACIÓN obligatoria para access tokens:
+  @hasMany(() => AccessToken, {
+    foreignKey: 'userId', // Cambia si tu columna es diferente (user_id)
+  })
+  declare accessTokens: HasMany<typeof AccessToken>
+
   @beforeCreate()
   static assignUuid(user: User) {
     user.id = uuidv4()
@@ -43,19 +49,4 @@ export default class User extends BaseModel {
       user.password = await hash.make(user.password)
     }
   }
-
-  @hasMany(() => Room, { foreignKey: 'player1Id' })
-  declare roomsAsPlayer1: HasMany<typeof Room>
-
-  @hasMany(() => Room, { foreignKey: 'player2Id' })
-  declare roomsAsPlayer2: HasMany<typeof Room>
-
-  @hasMany(() => Game, { foreignKey: 'player1Id' })
-  declare gamesAsPlayer1: HasMany<typeof Game>
-
-  @hasMany(() => Game, { foreignKey: 'player2Id' })
-  declare gamesAsPlayer2: HasMany<typeof Game>
-
-  @hasMany(() => Turn, { foreignKey: 'playerId' })
-  declare turns: HasMany<typeof Turn>
 }

@@ -1,9 +1,7 @@
+import { BaseModel, column, beforeCreate, hasMany } from '@adonisjs/lucid/orm'
 import { DateTime } from 'luxon'
-import { BaseModel, column, beforeCreate, belongsTo, hasOne } from '@adonisjs/lucid/orm'
-import type { BelongsTo, HasOne } from '@adonisjs/lucid/types/relations'
 import { v4 as uuidv4 } from 'uuid'
-import User from './user.js'
-import Game from './game.js'
+import RoomPlayer from '#models/room_player'
 
 export default class Room extends BaseModel {
   @column({ isPrimary: true })
@@ -13,13 +11,10 @@ export default class Room extends BaseModel {
   declare name: string
 
   @column()
-  declare player1Id: string
+  declare hostId: string
 
   @column()
-  declare player2Id: string | null
-
-  @column()
-  declare status: 'waiting' | 'full' | 'started' | 'finished'
+  declare status: 'waiting' | 'playing' | 'finished'
 
   @column.dateTime({ autoCreate: true })
   declare createdAt: DateTime
@@ -27,17 +22,11 @@ export default class Room extends BaseModel {
   @column.dateTime({ autoCreate: true, autoUpdate: true })
   declare updatedAt: DateTime
 
+  @hasMany(() => RoomPlayer)
+  declare players: any // <- así, o incluso sin tipo
+
   @beforeCreate()
   static assignUuid(room: Room) {
     room.id = uuidv4()
   }
-
-  @belongsTo(() => User, { foreignKey: 'player1Id' })
-  declare player1: BelongsTo<typeof User>
-
-  @belongsTo(() => User, { foreignKey: 'player2Id' })
-  declare player2: BelongsTo<typeof User>
-
-  @hasOne(() => Game, { foreignKey: 'roomId' })
-  declare game: HasOne<typeof Game>
 }

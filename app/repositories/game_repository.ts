@@ -1,28 +1,27 @@
+// app/repositories/game_repository.ts
 import Game from '#models/game'
+import GameCard from '#models/game_card'
+import GamePlayer from '#models/game_player'
+import GameMark from '#models/game_mark'
 
-export class GameRepository {
-  async findById(id: string) {
-    return Game.query()
-      .where('id', id)
-      .preload('player1')
-      .preload('player2')
-      .preload('turns')
-      .first()
+export default class GameRepository {
+  static async getById(id: string) {
+    return Game.findOrFail(id)
   }
 
-  async save(game: Game) {
-    return game.save()
+  static async getCards(gameId: string) {
+    return GameCard.query().where('game_id', gameId)
   }
 
-  async getHistoryByUserId(userId: string) {
-    return Game.query()
-      .where(q => {
-        q.where('player1_id', userId).orWhere('player2_id', userId)
-      })
-      .where('status', 'finished')
-      .preload('player1')
-      .preload('player2')
-      .preload('winner')
-      .orderBy('finished_at', 'desc')
+  static async getPlayers(gameId: string) {
+    return GamePlayer.query().where('game_id', gameId)
+  }
+
+  static async getMarks(gamePlayerId: string) {
+    return GameMark.query().where('game_player_id', gamePlayerId)
+  }
+
+  static async getPlayerByUser(gameId: string, userId: string) {
+    return GamePlayer.query().where({ gameId, userId }).firstOrFail()
   }
 }

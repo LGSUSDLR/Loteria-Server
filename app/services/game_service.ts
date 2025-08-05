@@ -1,205 +1,158 @@
-import { GameRepository } from '#repositories/game_repository'
-import type { GameStateResponseDto, GameHistoryItemDto, GameDetailsResponseDto } from '#dtos/game'
+// app/services/game_service.ts
 import Game from '#models/game'
-import Turn from '#models/turn'
+import Room from '#models/room'
+import RoomPlayer from '#models/room_player'
+import GamePlayer from '#models/game_player'
+import GameCard from '#models/game_card'
+import GameMark from '#models/game_mark'
+import { ALL_CARDS } from '#utils/lottery_cards'
 import User from '#models/user'
-import { DateTime } from 'luxon'
-import Database from '@adonisjs/lucid/services/db'
 
-export class GameService {
-  private repo = new GameRepository()
+export default class GameService {
+  // 1. Iniciar partida desde una room
+  static async startGameFromRoom(room: Room) {
+  const game = await Game.create({
+    roomId: room.id,
+    hostId: room.hostId,
+    status: 'playing',
+  });
 
-  async getById(gameId: string) {
-    return this.repo.findById(gameId)
+  const players = await RoomPlayer.query().where('room_id', room.id);
+  const usedCartons = new Set<string>();
+  const CARTA_SIZE = 16;
+
+  for (const player of players) {
+    // SOLO CREA CARTÓN SI NO ES EL HOST
+    if (player.userId === room.hostId) continue;
+
+    let cartasJugador: string[];
+    let cartaKey: string;
+    do {
+      cartasJugador = this.shuffleArray([...ALL_CARDS]).slice(0, CARTA_SIZE);
+      cartaKey = cartasJugador.join(',');
+    } while (usedCartons.has(cartaKey));
+    usedCartons.add(cartaKey);
+
+    await GamePlayer.create({
+      gameId: game.id,
+      userId: player.userId,
+      card: JSON.stringify(cartasJugador),
+      isWinner: false,
+    });
   }
 
-  async getState(game: Game, userId: string): Promise<GameStateResponseDto | null> {
-    if (![game.player1Id, game.player2Id].includes(userId)) return null
-    await game.load('player1')
-    await game.load('player2')
-    await game.load('turns')
-    const isPlayer1 = game.player1Id === userId
-    return {
-      game_id: game.id,
-      status: game.status,
-      current_turn: game.currentTurn,
-      is_my_turn: game.canPlayerMove(userId),
-      my_board: isPlayer1 ? game.player1InitialBoard : game.player2InitialBoard,
-      opponent_board: isPlayer1 ? game.player2InitialBoard : game.player1InitialBoard,
-      my_attacks: game.getPlayerAttacks(userId),
-      opponent_attacks: game.getOpponentAttacks(userId),
-      player1: { id: game.player1.id, name: game.player1.name },
-      player2: { id: game.player2.id, name: game.player2.name },
-      winner_id: game.winnerId,
-      my_hits: game.countHits(userId),
-      opponent_hits: isPlayer1 ? game.countHits(game.player2Id) : game.countHits(game.player1Id),
-    }
-  }
-
-async attack(game: Game, userId: string, x: number, y: number) {
-  if (![game.player1Id, game.player2Id].includes(userId))
-    throw new Error('No tienes acceso a este juego')
-  await game.load('turns')
-  if (!game.canPlayerMove(userId)) throw new Error('No es tu turno o el juego ha terminado')
-  if (game.hasAttackedPosition(userId, x, y)) throw new Error('Ya atacaste esa posición')
-
-  const trx = await Database.transaction()
-  try {
-    const opponentBoard = game.getOpponentBoard(userId)
-    const isHit = opponentBoard[x][y] === 1
-
-    console.log('[DEBUG] Atacando posición:', x, y, 'isHit:', isHit)
-
-    const maxResult = (await Turn.query({ client: trx })
-      .where('game_id', game.id)
-      .max('turn_number as max')) as unknown as { max: number | null }[]
-
-    const turnNumber = Number(maxResult[0]?.max) || 0
-
-    // CREA EL TURNO DEL ATAQUE
-    await Turn.create(
-      {
-        gameId: game.id,
-        playerId: userId,
-        attackX: x,
-        attackY: y,
-        isHit,
-        turnNumber: turnNumber + 1,
-      },
-      { client: trx }
-    )
-
-    // GUARDA JUEGO Y TERMINA LA TRANSACCIÓN
-    game.useTransaction(trx)
-    await game.save()
-    await trx.commit()
-
-    // *** AHORA recarga los turns fuera del commit ***
-    await game.load('turns', (query) => query.orderBy('turn_number', 'asc'))
-
-    // LOGS PARA DEBUG
-    const hits = game.turns.filter(t => t.playerId === userId && t.isHit).length
-    console.log('[DEBUG] Post-commit hits para', userId, ':', hits)
-    game.turns.forEach(t => {
-      console.log('[DEBUG TURN]', {
-        playerId: t.playerId,
-        turnNumber: t.turnNumber,
-        attackX: t.attackX,
-        attackY: t.attackY,
-        isHit: t.isHit,
-      })
-    })
-
-    let finished = false
-    if (game.checkWinner(userId)) {
-      console.log('[DEBUG] ¡DETECTADO WINNER! userId:', userId)
-      game.status = 'finished'
-      game.winnerId = userId
-      game.finishedAt = DateTime.local()
-      // Actualiza wins/losses fuera de la transacción
-      const winner = await User.find(userId)
-      const loserId = userId === game.player1Id ? game.player2Id : game.player1Id
-      const loser = await User.find(loserId)
-      if (winner) await winner.merge({ wins: winner.wins + 1 }).save()
-      if (loser) await loser.merge({ losses: loser.losses + 1 }).save()
-      finished = true
-      await game.save()
-    } else {
-      game.currentTurn = game.currentTurn === 1 ? 2 : 1
-      await game.save()
-    }
-
-    return {
-      success: true,
-      hit: isHit,
-      winner_id: game.winnerId,
-      game_finished: finished,
-      current_turn: game.currentTurn,
-      my_hits: game.countHits(userId),
-    }
-  } catch (error) {
-    await trx.rollback()
-    throw error
-  }
+  return game;
 }
 
 
-
-  async getHistory(userId: string): Promise<GameHistoryItemDto[]> {
-    const games = await this.repo.getHistoryByUserId(userId)
-    return games.map((game) => {
-      const isPlayer1 = game.player1Id === userId
-      const opponent = isPlayer1 ? game.player2 : game.player1
-      const won = game.winnerId === userId
-      return {
-        id: game.id,
-        opponent: opponent?.name ?? '',
-        won,
-        finished_at: game.finishedAt?.toFormat('dd/MM/yyyy HH:mm') ?? '',
-        my_hits: game.countHits(userId),
-        opponent_hits: isPlayer1 ? game.countHits(game.player2Id) : game.countHits(game.player1Id),
-      }
-    })
-  }
-
-  async getDetails(game: Game, userId: string): Promise<GameDetailsResponseDto | null> {
-    if (![game.player1Id, game.player2Id].includes(userId)) return null
-
-    await game.load('player1')
-    await game.load('player2')
-    await game.load('turns', (builder) => builder.preload('player'))
-
-    return {
-      game: {
-        id: game.id,
-        status: game.status,
-        started_at: game.startedAt?.toFormat('dd/MM/yyyy HH:mm') ?? '',
-        finished_at: game.finishedAt?.toFormat('dd/MM/yyyy HH:mm') ?? null,
-        winner_id: game.winnerId,
-      },
-      players: {
-        player1: game.player1?.name ?? '',
-        player2: game.player2?.name ?? '',
-      },
-      boards: {
-        my_board: game.getPlayerBoard(userId),
-        opponent_board: game.getOpponentBoard(userId),
-      },
-      attacks: {
-        my_attacks: game.getPlayerAttacks(userId),
-        opponent_attacks: game.getPlayerAttacks(
-          userId === game.player1Id ? game.player2Id : game.player1Id
-        ),
-      },
-      turns: game.turns,
+  // Fisher-Yates shuffle
+  private static shuffleArray<T>(array: T[]): T[] {
+    const arr = [...array]
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[arr[i], arr[j]] = [arr[j], arr[i]]
     }
+    return arr
   }
 
-  async abandon(game: Game, userId: string) {
-    if (![game.player1Id, game.player2Id].includes(userId))
-      throw new Error('No tienes acceso a este juego')
-    if (game.status !== 'playing') throw new Error('El juego ya ha terminado')
-    const trx = await Database.transaction()
-    try {
-      const opponentId = userId === game.player1Id ? game.player2Id : game.player1Id
-      game.status = 'finished'
-      game.winnerId = opponentId
-      game.finishedAt = DateTime.local()
-      game.useTransaction(trx)
-      await game.save()
-      const winner = await User.find(opponentId, { client: trx })
-      const loser = await User.find(userId, { client: trx })
-      if (winner) await winner.merge({ wins: winner.wins + 1 }).save()
-      if (loser) await loser.merge({ losses: loser.losses + 1 }).save()
-      await trx.commit()
-      return {
-        success: true,
-        message: 'Partida abandonada exitosamente',
-        winner_id: opponentId,
-      }
-    } catch (err) {
-      await trx.rollback()
-      throw err
-    }
+  // 2. El anfitrión voltea/barajea la siguiente carta (sin repetir)
+  static async flipNextCard(gameId: string, hostId: string) {
+    const game = await Game.findOrFail(gameId)
+    if (game.hostId !== hostId) throw new Error('Solo el anfitrión puede barajar cartas')
+    if (game.status !== 'playing') throw new Error('La partida no está activa')
+
+    const usedCards = await GameCard.query().where('game_id', gameId)
+    const used = usedCards.map(c => c.card)
+    const available = ALL_CARDS.filter(c => !used.includes(c))
+    if (available.length === 0) throw new Error('Ya no quedan cartas por voltear')
+
+    const next = available[Math.floor(Math.random() * available.length)]
+    await GameCard.create({ gameId, card: next })
+    return next
   }
+
+// 3. El jugador marca una carta (SOLO impide marcar dos veces, no banea aquí)
+// app/services/game_service.ts
+// app/services/game_service.ts
+
+static async markCard(gamePlayerId: string, card: string) {
+  const player = await GamePlayer.findOrFail(gamePlayerId)
+
+  // Ya está baneado, no puede marcar nada
+  if (player.isBanned) throw new Error('Has sido baneado por trampa.')
+
+  // Solo prohíbe marcar la misma carta dos veces
+  const existing = await GameMark.query()
+    .where('game_player_id', gamePlayerId)
+    .where('card', card)
+    .first()
+  if (existing) throw new Error('Ya marcaste esa carta')
+
+  // ¡Permite marcar cualquier carta!
+  await GameMark.create({ gamePlayerId, card })
+  return { success: true }
+}
+
+
+static async validateWinner(gamePlayerId: string) {
+  const player = await GamePlayer.findOrFail(gamePlayerId)
+  if (player.isBanned) throw new Error('Has sido baneado por trampa.')
+
+  const cards = typeof player.card === 'string' ? JSON.parse(player.card) : player.card
+  const marks = await GameMark.query().where('game_player_id', gamePlayerId)
+  const flipped = await GameCard.query().where('game_id', player.gameId)
+  const flippedSet = new Set(flipped.map(gc => gc.card))
+
+  // Debe tener todas las fichas puestas (sin faltar ni sobrar)
+  if (marks.length !== cards.length) return { winner: false }
+
+  // Todas las cartas marcadas deben estar en cardsFlipped
+  const allMarksFlipped = marks.every(m => flippedSet.has(m.card))
+  if (!allMarksFlipped) {
+    player.isBanned = true
+    await player.save()
+    throw new Error('Trampa detectada: pusiste fichas en cartas que no han salido. Has sido baneado.')
+  }
+
+  // Todas las cartas de su cartón deben estar marcadas
+  const markedSet = new Set(marks.map(m => m.card))
+const allCardsMarked = cards.every((c: string) => markedSet.has(c))
+  if (!allCardsMarked) return { winner: false }
+
+  // Si todo se cumple, ¡es ganador!
+  player.isWinner = true
+  await player.save()
+  return { winner: true }
+}
+
+
+  // 5. Consultar el estado general del juego (para polling frontend)
+ static async getGameState(gameId: string) {
+  const game = await Game.findOrFail(gameId)
+  const gamePlayers = await GamePlayer.query().where('game_id', gameId)
+const cardsFlipped = await GameCard.query().where('game_id', gameId).orderBy('created_at', 'asc')
+
+  const userIds = gamePlayers.map(gp => gp.userId)
+  const users = await User.query().whereIn('id', userIds)
+
+  return {
+    status: game.status,
+    cardsFlipped: cardsFlipped.map(c => c.card),
+    players: await Promise.all(gamePlayers.map(async gp => {
+      const marks = await GameMark.query().where('game_player_id', gp.id)
+      const user = users.find(u => u.id === gp.userId)
+      return {
+        playerId: gp.userId,
+        gamePlayerId: gp.id,        // <-- Agrega esto!!
+        name: user?.name || 'Jugador',
+        card: typeof gp.card === 'string' ? JSON.parse(gp.card) : gp.card,
+        marks: marks.map(m => m.card),
+        isWinner: gp.isWinner,
+        isBanned: gp.isBanned,  // <-- nuevo campo importante
+      }
+    })),
+    hostId: game.hostId,
+  }
+}
+
 }

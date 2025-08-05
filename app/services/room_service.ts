@@ -1,79 +1,62 @@
-import { RoomRepository } from '#repositories/room_repository'
-import type { CreateRoomRequestDto } from '#dtos/room'
+import RoomRepository from '#repositories/room_repository'
+import RoomPlayer from '#models/room_player'
 import Room from '#models/room'
-import Game from '#models/game'
-import { DateTime } from 'luxon'
 
-export class RoomService {
-  private repo = new RoomRepository()
-
-  async listAvailable() {
-    return this.repo.findWaitingRooms()
+export default class RoomService {
+  static async createRoom(hostId: string, name: string) {  // ← ACEPTA name
+    return await RoomRepository.create(hostId, name)       // ← Lo pasa al repo
   }
 
-  async create(dto: CreateRoomRequestDto, player1Id: string) {
-    return this.repo.create({ name: dto.name, player1Id, status: 'waiting' })
+  static async joinRoom(roomId: string, userId: string) {
+    const exists = await RoomRepository.findPlayer(roomId, userId)
+    if (exists) throw new Error('Ya estás en la sala')
+    return await RoomRepository.addPlayer(roomId, userId)
   }
 
-  async getById(id: string) {
-    return this.repo.findById(id)
+  static async listRooms() {
+    return await RoomRepository.listAvailable()
   }
 
-  async join(room: Room, player2Id: string) {
-    if (room.player2Id) throw new Error('Sala llena')
-    room.player2Id = player2Id
-    room.status = 'full'
-    await this.repo.save(room)
-    return room
+// RoomService.ts
+static async getRoomStatus(roomId: string) {
+  const room = await Room.findOrFail(roomId)
+  const players = await RoomPlayer.query().where('room_id', roomId)
+  // Si los jugadores no traen el name, haz join con la tabla users
+  const playersDetailed = await RoomPlayer
+    .query()
+    .where('room_id', roomId)
+    .preload('user') // suponiendo que tienes relación 'user' en RoomPlayer
+
+  return {
+    hostId: room.hostId, // <-- esto lo necesita el frontend
+    status: room.status,
+    players: playersDetailed.map((p) => ({
+      id: p.userId,
+      name: p.user?.name || 'Desconocido'
+    }))
+  }
+}
+
+
+  static async canStart(roomId: string) {
+    const total = await RoomRepository.countPlayers(roomId)
+    return total >= 4 && total <= 16
   }
 
-  async start(room: Room) {
-    if (!room.player1Id || !room.player2Id) throw new Error('Faltan jugadores')
-    if (room.status !== 'full') throw new Error('No puedes iniciar aún')
-    room.status = 'started'
-    await this.repo.save(room)
-    // Crea el juego
-    const newGame = await Game.create({
-      roomId: room.id,
-      player1Id: room.player1Id,
-      player2Id: room.player2Id,
-      player1InitialBoard: Game.generateBoard(),
-      player2InitialBoard: Game.generateBoard(),
-      currentTurn: 1,
-      status: 'playing',
-      startedAt: DateTime.local(),
-    })
-    return { room, game: newGame }
+static async leaveRoom(roomId: string, userId: string) {
+  // Encuentra la sala
+  const room = await Room.findOrFail(roomId)
+  // Si el que sale es el anfitrión...
+  if (room.hostId === userId) {
+    // Elimina todos los jugadores de la sala
+    await RoomPlayer.query().where('room_id', roomId).delete()
+    // Elimina la sala
+    await room.delete()
+  } else {
+    // Solo elimina al jugador de RoomPlayer
+    await RoomPlayer.query().where('room_id', roomId).where('user_id', userId).delete()
   }
+}
 
-  async leave(room: Room, userId: string) {
-    if (room.player1Id === userId) {
-      await this.repo.delete(room)
-      return { deleted: true }
-    }
-    if (room.player2Id === userId) {
-      room.player2Id = null
-      room.status = 'waiting'
-      await this.repo.save(room)
-      return { left: true }
-    }
-    throw new Error('No tienes permisos')
-  }
 
-  async status(room: Room) {
-    await room.load('player1')
-    await room.load('player2')
-    // Busca el game_id si la sala está iniciada
-    let gameId = null
-    if (room.status === 'started') {
-      const game = await Game.query().where('room_id', room.id).first()
-      if (game) gameId = game.id
-    }
-    return {
-      status: room.status,
-      player1: room.player1 ? { id: room.player1.id, name: room.player1.name } : null,
-      player2: room.player2 ? { id: room.player2.id, name: room.player2.name } : null,
-      game_id: gameId,
-    }
-  }
 }
