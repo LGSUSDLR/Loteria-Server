@@ -126,7 +126,6 @@ const allCardsMarked = cards.every((c: string) => markedSet.has(c))
 }
 
 
-  // 5. Consultar el estado general del juego (para polling frontend)
  static async getGameState(gameId: string) {
   const game = await Game.findOrFail(gameId)
   const gamePlayers = await GamePlayer.query().where('game_id', gameId)
