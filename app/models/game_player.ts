@@ -21,6 +21,9 @@ export default class GamePlayer extends BaseModel {
   @column()
   declare isBanned: boolean
 
+  @column()
+  public isActive!: boolean  
+
 
   @beforeCreate()
   static assignUuid(gamePlayer: GamePlayer) {

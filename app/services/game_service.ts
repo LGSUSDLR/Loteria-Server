@@ -154,4 +154,31 @@ const cardsFlipped = await GameCard.query().where('game_id', gameId).orderBy('cr
   }
 }
 
+
+
+
+static async leaveGame(gameId: string, userId: string) {
+  const player = await GamePlayer.query()
+    .where('game_id', gameId)
+    .where('user_id', userId)
+    .first()
+  if (player) {
+    player.isActive = false
+    player.card = '[]'  // ⚡️ Limpia el cartón
+    await player.save()
+  }
+
+  const activePlayers = await GamePlayer.query()
+    .where('game_id', gameId)
+    .where('isActive', true)
+    .where('isBanned', false)
+
+  if (activePlayers.length < 2) {
+    const game = await Game.findOrFail(gameId)
+    game.status = 'finished'
+    await game.save()
+  }
+}
+
+
 }

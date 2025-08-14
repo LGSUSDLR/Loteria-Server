@@ -20,22 +20,33 @@ export default class RoomService {
 // RoomService.ts
 static async getRoomStatus(roomId: string) {
   const room = await Room.findOrFail(roomId)
-  const players = await RoomPlayer.query().where('room_id', roomId)
-  // Si los jugadores no traen el name, haz join con la tabla users
   const playersDetailed = await RoomPlayer
     .query()
     .where('room_id', roomId)
-    .preload('user') // suponiendo que tienes relación 'user' en RoomPlayer
+    .preload('user')
+
+  // Limpia jugadores sin usuario o sin sesión válida
+  const validPlayers = playersDetailed.filter(p => !!p.user)
+
+  // Opcional: Elimina de la base de datos los "fantasmas" aquí
+  const idsToDelete = playersDetailed.filter(p => !p.user).map(p => p.userId)
+  if (idsToDelete.length) {
+    await RoomPlayer.query()
+      .where('room_id', roomId)
+      .whereIn('user_id', idsToDelete)
+      .delete()
+  }
 
   return {
-    hostId: room.hostId, // <-- esto lo necesita el frontend
+    hostId: room.hostId,
     status: room.status,
-    players: playersDetailed.map((p) => ({
+    players: validPlayers.map((p) => ({
       id: p.userId,
       name: p.user?.name || 'Desconocido'
     }))
   }
 }
+
 
 
   static async canStart(roomId: string) {

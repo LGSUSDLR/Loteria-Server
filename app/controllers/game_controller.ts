@@ -3,24 +3,18 @@ import Room from '#models/room'
 import Game from '#models/game'
 import type { HttpContext } from '@adonisjs/core/http'
 
-type UserResponseDto = {
-  id: string
-  name: string
-  email: string
-}
-
 export default class GameController {
-  // Inicia un juego desde una room (solo el host puede hacerlo)
-
-  
-  async startFromRoom({ auth, params, response }: any) {
+  async startFromRoom({ user, params, response }: HttpContext) {
+    if (!user) {
+      return response.unauthorized({ message: 'No autenticado' })
+    }
+    const hostId = user.id
+    const roomId = params.roomId
+    const room = await Room.findOrFail(roomId)
+    if (room.hostId !== hostId) {
+      return response.unauthorized({ message: 'Solo el anfitrión puede iniciar el juego' })
+    }
     try {
-      const hostId = auth.user!.id
-      const roomId = params.roomId
-      const room = await Room.findOrFail(roomId)
-      if (room.hostId !== hostId) {
-        return response.unauthorized({ message: 'Solo el anfitrión puede iniciar el juego' })
-      }
       const game = await GameService.startGameFromRoom(room)
       return response.created(game)
     } catch (error) {
@@ -28,24 +22,21 @@ export default class GameController {
     }
   }
 
-async flipCard(ctx: HttpContext) {
-  const user = ctx.user as UserResponseDto | undefined
-
-  if (!user) {
-    return ctx.response.unauthorized({ error: 'No autenticado' })
+  async flipCard({ user, params, response }: HttpContext) {
+    if (!user) {
+      return response.unauthorized({ error: 'No autenticado' })
+    }
+    const hostId = user.id
+    const gameId = params.gameId
+    try {
+      const card = await GameService.flipNextCard(gameId, hostId)
+      return response.ok({ card })
+    } catch (error) {
+      return response.badRequest({ error: error.message })
+    }
   }
 
-  try {
-    const gameId = ctx.params.gameId
-    const card = await GameService.flipNextCard(gameId, user.id)
-    return ctx.response.ok({ card })
-  } catch (error) {
-    return ctx.response.badRequest({ error: error.message })
-  }
-}
-
-
-  async markCard({ params, request, response }: any) {
+  async markCard({ params, request, response }: HttpContext) {
     try {
       const gamePlayerId = params.gamePlayerId
       const { card } = request.only(['card'])
@@ -56,7 +47,7 @@ async flipCard(ctx: HttpContext) {
     }
   }
 
-  async validateWinner({ params, response }: any) {
+  async validateWinner({ params, response }: HttpContext) {
     try {
       const gamePlayerId = params.gamePlayerId
       const result = await GameService.validateWinner(gamePlayerId)
@@ -66,21 +57,17 @@ async flipCard(ctx: HttpContext) {
     }
   }
 
-async state({ params, response }: any) {
-  try {
-    const gameId = params.gameId
-    console.log('Consultando estado del juego para:', gameId) // 👈 LOG ÚTIL
-    const state = await GameService.getGameState(gameId)
-    return response.ok(state)
-  } catch (error) {
-    console.error('ERROR GAME STATE:', error) // 👈 LOG ÚTIL
-    return response.badRequest({ error: error.message })
+  async state({ params, response }: HttpContext) {
+    try {
+      const gameId = params.gameId
+      const state = await GameService.getGameState(gameId)
+      return response.ok(state)
+    } catch (error) {
+      return response.badRequest({ error: error.message })
+    }
   }
-}
 
-
-  // NUEVO: Obtener gameId a partir de roomId
-  async getGameForRoom({ params, response }: any) {
+  async getGameForRoom({ params, response }: HttpContext) {
     try {
       const game = await Game.query()
         .where('room_id', params.roomId)
@@ -95,20 +82,36 @@ async state({ params, response }: any) {
     }
   }
 
-async endGame(ctx: any) {
-  try {
-    const hostId = ctx.user.id;   // <-- Cambiado
-    const gameId = ctx.params.gameId; // <-- Cambiado
-    const game = await Game.findOrFail(gameId)
-    if (game.hostId !== hostId) {
-      return ctx.response.unauthorized({ message: 'Solo el anfitrión puede terminar la partida' })
+  async endGame({ user, params, response }: HttpContext) {
+    if (!user) {
+      return response.unauthorized({ message: 'No autenticado' })
     }
-    game.status = 'finished'
-    await game.save()
-    return ctx.response.ok({ message: 'Partida finalizada' })
-  } catch (error) {
-    return ctx.response.badRequest({ error: error.message })
+    const hostId = user.id
+    const gameId = params.gameId
+    try {
+      const game = await Game.findOrFail(gameId)
+      if (game.hostId !== hostId) {
+        return response.unauthorized({ message: 'Solo el anfitrión puede terminar la partida' })
+      }
+      game.status = 'finished'
+      await game.save()
+      return response.ok({ message: 'Partida finalizada' })
+    } catch (error) {
+      return response.badRequest({ error: error.message })
+    }
   }
-}
 
+  async leaveGame({ user, params, response }: HttpContext) {
+    if (!user) {
+      return response.unauthorized({ error: 'No autenticado' })
+    }
+    const userId = user.id
+    const gameId = params.gameId
+    try {
+      await GameService.leaveGame(gameId, userId)
+      return response.ok({ left: true })
+    } catch (error) {
+      return response.badRequest({ error: error.message })
+    }
+  }
 }
